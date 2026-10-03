@@ -1,14 +1,11 @@
 import json
-import os
-import pathlib
+import streamlit as st
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any
 
-def _get_profile_path() -> pathlib.Path:
-    """Get the path to the user profile JSON file, creating directory if needed."""
-    profile_dir = pathlib.Path.home() / ".cv_app"
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    return profile_dir / "user_profile.json"
+
+_SESSION_KEY = "user_profile"
+
 
 def _get_empty_profile() -> Dict[str, Any]:
     """Return a completely empty but structurally valid profile."""
@@ -28,34 +25,58 @@ def _get_empty_profile() -> Dict[str, Any]:
         "last_updated": datetime.now().isoformat()
     }
 
+
 def load_profile() -> Dict[str, Any]:
-    """Load profile from disk, return empty profile dict if it doesn't exist."""
-    path = _get_profile_path()
-    if not path.exists():
-        return _get_empty_profile()
-    
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            profile = json.load(f)
-            # Ensure all keys exist
-            empty = _get_empty_profile()
-            for k, v in empty.items():
-                if k not in profile:
-                    profile[k] = v
-            return profile
-    except Exception as e:
-        print(f"Error loading profile: {e}")
-        return _get_empty_profile()
+    """Load profile from session state. Returns empty profile if none exists."""
+    if _SESSION_KEY not in st.session_state:
+        st.session_state[_SESSION_KEY] = _get_empty_profile()
+
+    profile = st.session_state[_SESSION_KEY]
+    # Ensure all keys exist (forward-compatibility)
+    empty = _get_empty_profile()
+    for k, v in empty.items():
+        if k not in profile:
+            profile[k] = v
+    return profile
+
 
 def save_profile(profile: Dict[str, Any]) -> None:
-    """Save profile to disk."""
-    path = _get_profile_path()
+    """Save profile to session state."""
+    profile["last_updated"] = datetime.now().isoformat()
+    st.session_state[_SESSION_KEY] = profile
+
+
+def clear_profile() -> None:
+    """Reset profile to empty."""
+    st.session_state[_SESSION_KEY] = _get_empty_profile()
+
+
+def export_profile_json(profile: Dict[str, Any]) -> str:
+    """Serialize profile to a JSON string for download."""
+    return json.dumps(profile, indent=2, ensure_ascii=False)
+
+
+def import_profile_json(json_bytes: bytes) -> Dict[str, Any]:
+    """
+    Parse uploaded JSON bytes into a profile dict.
+    Validates structure and merges with empty profile to ensure all keys exist.
+    Raises ValueError on invalid JSON.
+    """
     try:
-        profile["last_updated"] = datetime.now().isoformat()
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(profile, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving profile: {e}")
+        data = json.loads(json_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"Invalid JSON file: {e}")
+
+    if not isinstance(data, dict):
+        raise ValueError("JSON file must contain a single object, not a list or other type.")
+
+    # Ensure all keys exist
+    empty = _get_empty_profile()
+    for k, v in empty.items():
+        if k not in data:
+            data[k] = v
+    return data
+
 
 def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -63,12 +84,12 @@ def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) ->
     New data overwrites simple fields if present, appends to lists (deduplicating).
     """
     merged = existing_profile.copy()
-    
+
     # Overwrite simple fields if new data has them and they are not empty
     for field in ["name", "email", "phone", "location", "summary", "linkedin_url"]:
         if new_data.get(field):
             merged[field] = new_data[field]
-            
+
     # Merge dict fields
     if new_data.get("linkedin_data"):
         if not merged.get("linkedin_data"):
@@ -99,13 +120,13 @@ def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) ->
             # Check if this experience already exists (match by company and title)
             match_found = False
             for i, exist_exp in enumerate(existing_exp):
-                if (exist_exp.get("company", "").lower() == new_exp.get("company", "").lower() and 
+                if (exist_exp.get("company", "").lower() == new_exp.get("company", "").lower() and
                     exist_exp.get("title", "").lower() == new_exp.get("title", "").lower()):
                     # Match found, update fields if empty, merge bullets
                     match_found = True
                     if not exist_exp.get("dates") and new_exp.get("dates"):
                         existing_exp[i]["dates"] = new_exp["dates"]
-                    
+
                     # Merge bullets
                     exist_bullets = set(exist_exp.get("bullets", []))
                     for b in new_exp.get("bullets", []):
@@ -113,7 +134,7 @@ def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) ->
                             existing_exp[i].setdefault("bullets", []).append(b)
                             exist_bullets.add(b)
                     break
-            
+
             if not match_found:
                 existing_exp.append(new_exp)
         merged["experience"] = existing_exp
@@ -125,7 +146,7 @@ def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) ->
             # Check if this education already exists (match by institution and degree)
             match_found = False
             for i, exist_edu in enumerate(existing_edu):
-                if (exist_edu.get("institution", "").lower() == new_edu.get("institution", "").lower() and 
+                if (exist_edu.get("institution", "").lower() == new_edu.get("institution", "").lower() and
                     exist_edu.get("degree", "").lower() == new_edu.get("degree", "").lower()):
                     match_found = True
                     if not exist_edu.get("dates") and new_edu.get("dates"):
@@ -133,13 +154,14 @@ def merge_cv_data(existing_profile: Dict[str, Any], new_data: Dict[str, Any]) ->
                     if not exist_edu.get("details") and new_edu.get("details"):
                         existing_edu[i]["details"] = new_edu["details"]
                     break
-            
+
             if not match_found:
                 existing_edu.append(new_edu)
         merged["education"] = existing_edu
-        
+
     merged["last_updated"] = datetime.now().isoformat()
     return merged
+
 
 def extract_profile_from_text(resume_text: str, provider: str, api_key: str, base_url: str, model_name: str) -> Dict[str, Any]:
     """
@@ -147,7 +169,7 @@ def extract_profile_from_text(resume_text: str, provider: str, api_key: str, bas
     Calls appropriate provider and returns dict matching the profile schema.
     """
     prompt = f"""
-Please extract the following resume text into a structured JSON format. 
+Please extract the following resume text into a structured JSON format.
 Return ONLY valid JSON and nothing else. Ensure the keys and structure exactly match this schema:
 {{
   "name": "string",
@@ -180,9 +202,9 @@ Return ONLY valid JSON and nothing else. Ensure the keys and structure exactly m
 Resume Text:
 {resume_text}
 """
-    
+
     response_text = ""
-    
+
     try:
         if provider == 'Claude (Anthropic)':
             import anthropic
@@ -195,7 +217,7 @@ Resume Text:
                 ]
             )
             response_text = response.content[0].text
-            
+
         elif provider == 'Gemini (Google)':
             import google.genai as genai
             client = genai.Client(api_key=api_key)
@@ -204,7 +226,7 @@ Resume Text:
                 contents=prompt
             )
             response_text = response.text
-            
+
         else:
             # Ollama / Custom Provider
             import requests
@@ -218,7 +240,7 @@ Resume Text:
             res = requests.post(url, json=payload)
             res.raise_for_status()
             response_text = res.json().get("response", "")
-            
+
         # Clean up response text to find JSON
         response_text = response_text.strip()
         if response_text.startswith("```json"):
@@ -227,39 +249,39 @@ Resume Text:
             response_text = response_text[3:]
         if response_text.endswith("```"):
             response_text = response_text[:-3]
-            
+
         response_text = response_text.strip()
-        
+
         extracted_data = json.loads(response_text)
         return extracted_data
     except Exception as e:
         print(f"Error extracting profile: {e}")
         return {}
 
+
 def get_profile_summary(profile: Dict[str, Any]) -> str:
     """Return a human-readable summary of the stored profile."""
     lines = []
-    
+
     name = profile.get("name", "Unknown User")
     lines.append(f"Profile: {name}")
-    
+
     contact = []
     if profile.get("email"): contact.append(profile["email"])
     if profile.get("phone"): contact.append(profile["phone"])
     if profile.get("location"): contact.append(profile["location"])
     if contact:
         lines.append(f"Contact: {' | '.join(contact)}")
-        
+
     if profile.get("summary"):
         lines.append("\nSummary:")
         lines.append(profile["summary"])
-        
+
     skills = profile.get("skills", [])
     if skills:
         lines.append("\nSkills:")
-        # Wrap skills
         lines.append(", ".join(skills))
-        
+
     exp = profile.get("experience", [])
     if exp:
         lines.append(f"\nExperience ({len(exp)} roles):")
@@ -268,7 +290,7 @@ def get_profile_summary(profile: Dict[str, Any]) -> str:
             company = e.get("company", "")
             dates = e.get("dates", "")
             lines.append(f"- {title} at {company} ({dates})")
-            
+
     edu = profile.get("education", [])
     if edu:
         lines.append(f"\nEducation ({len(edu)} degrees):")
@@ -276,12 +298,12 @@ def get_profile_summary(profile: Dict[str, Any]) -> str:
             deg = e.get("degree", "")
             inst = e.get("institution", "")
             lines.append(f"- {deg} from {inst}")
-            
+
     if profile.get("last_updated"):
         try:
             dt = datetime.fromisoformat(profile["last_updated"])
             lines.append(f"\nLast Updated: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
         except:
             pass
-            
+
     return "\n".join(lines)

@@ -11,8 +11,9 @@ from utils.analyzer import (
 )
 from utils.docx_generator import markdown_to_docx
 from utils.profile_store import (
-    load_profile, save_profile, merge_cv_data,
-    extract_profile_from_text, get_profile_summary
+    load_profile, save_profile, clear_profile, merge_cv_data,
+    extract_profile_from_text, get_profile_summary,
+    export_profile_json, import_profile_json
 )
 from utils.linkedin_scraper import fetch_linkedin_data, generate_linkedin_enhancement_suggestions
 
@@ -189,14 +190,22 @@ with st.sidebar:
         with st.expander("📋 Full Profile Details"):
             st.text(get_profile_summary(profile))
         if st.button("🗑️ Clear Profile", use_container_width=True):
-            from utils.profile_store import _get_profile_path
-            path = _get_profile_path()
-            if path.exists():
-                path.unlink()
+            clear_profile()
             st.success("Profile cleared!")
             st.rerun()
     else:
         st.caption("No profile stored yet. Upload a CV and it will be saved automatically.")
+
+    # Import profile from JSON
+    uploaded_profile = st.file_uploader("📂 Import Profile (.json)", type=["json"], key="sidebar_import")
+    if uploaded_profile:
+        try:
+            imported = import_profile_json(uploaded_profile.read())
+            save_profile(imported)
+            st.success(f"✅ Profile imported for {imported.get('name', 'user')}!")
+            st.rerun()
+        except ValueError as e:
+            st.error(f"❌ {e}")
 
     st.divider()
     st.markdown("**How it works**")
@@ -928,22 +937,29 @@ with tab_profile:
         if profile.get("last_updated"):
             st.caption(f"Last updated: {profile['last_updated']}")
 
-        # Export
+        # Export / Import / Reset
         st.divider()
-        export_col1, export_col2 = st.columns(2)
+        export_col1, export_col2, export_col3 = st.columns(3)
         with export_col1:
             st.download_button(
                 label="📥 Export Profile (JSON)",
-                data=__import__("json").dumps(profile, indent=2),
+                data=export_profile_json(profile),
                 file_name="cv_profile.json",
                 mime="application/json",
                 use_container_width=True
             )
         with export_col2:
+            import_file = st.file_uploader("📂 Import Profile", type=["json"], key="profile_tab_import", label_visibility="collapsed")
+            if import_file:
+                try:
+                    imported = import_profile_json(import_file.read())
+                    save_profile(imported)
+                    st.success(f"✅ Imported!")
+                    st.rerun()
+                except ValueError as e:
+                    st.error(f"❌ {e}")
+        with export_col3:
             if st.button("🗑️ Reset Profile", use_container_width=True, type="secondary"):
-                from utils.profile_store import _get_profile_path
-                path = _get_profile_path()
-                if path.exists():
-                    path.unlink()
+                clear_profile()
                 st.success("Profile cleared!")
                 st.rerun()
